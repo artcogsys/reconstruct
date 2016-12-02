@@ -2,6 +2,7 @@ from chainer import report
 from chainer import Chain
 import chainer.functions as F
 import chainer.links as L
+import numpy as np
 
 #####
 ## Regressor object

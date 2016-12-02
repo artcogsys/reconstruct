@@ -7,6 +7,8 @@ from chainer.training.extensions.evaluator import Evaluator
 import matplotlib.pyplot as plt
 from scipy.stats import zscore
 
+
+
 class Reconstructor(Evaluator):
     """
     Trainer extension to reconstruct images from a validation set.
