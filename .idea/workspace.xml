@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="29409026-557f-45f6-a171-c1f315b1b74a" name="Default" comment="">
-      <change type="DELETED" beforePath="$PROJECT_DIR$/result_silvan/cg.dot" afterPath="" />
-      <change type="DELETED" beforePath="$PROJECT_DIR$/result_silvan/log" afterPath="" />
-      <change type="DELETED" beforePath="$PROJECT_DIR$/result_silvan/loss.png" afterPath="" />
-      <change type="DELETED" beforePath="$PROJECT_DIR$/result_silvan/snapshot_100" afterPath="" />
-      <change type="DELETED" beforePath="$PROJECT_DIR$/test_silvan.py" afterPath="" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/.idea/workspace.xml" afterPath="$PROJECT_DIR$/.idea/workspace.xml" />
-    </list>
+    <list default="true" id="29409026-557f-45f6-a171-c1f315b1b74a" name="Default" comment="" />
     <ignored path="reconstruct.iws" />
     <ignored path=".idea/workspace.xml" />
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
