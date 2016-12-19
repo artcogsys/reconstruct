@@ -37,7 +37,7 @@ class MLP(Chain):
         return y
 
 #####
-## RNN
+## RNN 
 
 class RNN(Chain):
     """
