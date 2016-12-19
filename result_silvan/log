@@ -1,9 +1,0 @@
-[
-    {
-        "elapsed_time": 367055.6132700443, 
-        "main/loss": 1.6506384015083313, 
-        "validation/main/loss": 1.509615182876587, 
-        "iteration": 2, 
-        "epoch": 1
-    }
-]
