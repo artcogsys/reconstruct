@@ -5,19 +5,66 @@ from chainer import reporter as reporter_module
 from chainer import variable
 from chainer.training.extensions.evaluator import Evaluator
 import matplotlib.pyplot as plt
+
+from matplotlib.image import imsave
+
 from scipy.stats import zscore
+
+from args import args
 
 from sequential.functions import squeeze
 
 import cv2
 
+from scipy.io import savemat
+
 
 def downsample_square_imgs(imgs, downs_size): 
-    imgs_tmp = np.zeros([imgs.shape[0], downs_size, downs_size])
+    if len(imgs.shape) == 4:
+        imgs_tmp = np.zeros([imgs.shape[0], downs_size, downs_size, 3])
+    else: 
+        imgs_tmp = np.zeros([imgs.shape[0], downs_size, downs_size])
     for i in xrange(imgs.shape[0]): 
-        imgs_tmp[i,:,:] = cv2.resize(imgs[i,:,:], (downs_size, downs_size), interpolation=cv2.INTER_AREA ) 
-    imgs = imgs_tmp.astype('float32')
-    return imgs
+        imgs_tmp[i] = cv2.resize(imgs[i], (downs_size, downs_size), interpolation=cv2.INTER_AREA ) 
+    return imgs_tmp.astype('float32')
+
+
+def imadjust(img, tolerance = 0.0, inrange= [0.,255.], outrange = [0.,255.]):
+
+    tolerance = np.max([0, np.min([100, tolerance])])
+
+    if tolerance > 0.0: 
+        # compute in- and out limits
+
+        # Histogram
+        histogram = np.zeros(256)
+        for r in range(img.shape[0]):
+            for c in range(img.shape[1]):
+                histogram[int(np.round(img[r,c]))] += 1.0
+
+        # Cumulative histogram
+        cml_histogram = np.cumsum(histogram)
+
+        # Compute boundaries
+        low_bound = img.size * tolerance / 100.0
+        upp_bound = img.size * (100.0-tolerance) / 100.0
+
+        inrange[0] = np.where(cml_histogram >= low_bound)[0][0]
+        inrange[1] = np.where(cml_histogram >= upp_bound)[0][0]
+
+    # Stretching
+    scale = (outrange[1] - outrange[0]) / (inrange[1] - inrange[0])
+
+    #for r in xrange(img.shape[0]):
+    #    for c in range(img.shape[1]):
+    #        vs = np.max([img[r,c] - inrange[0], 0.0])
+    #        vd = np.min([int(vs * scale + 0.5) + outrange[0], outrange[1]])
+    #        img[r, c] = vd
+
+    img = np.minimum(np.floor(np.maximum(img - inrange[0], 0.0) * scale + 0.5) + outrange[0], 
+                     outrange[1])
+
+    return img
 
 
 
@@ -27,12 +74,15 @@ class ReconstructorGAN(Evaluator):
     and accumulate everything all in PNG. 
 
     """
-    def __init__(self, iterator, target, trained_gan, shape = None, filename='foo'):
+    def __init__(self, iterator, target, trained_gan, shape = None, filename='foo', z_outfilename = None, savesingle=False):
         super(ReconstructorGAN, self).__init__(iterator, target)
 
         self.shape = shape
         self.filename = filename
         self.trained_gan = trained_gan
+
+        self.z_outfilename = z_outfilename
+        self.savesingle = savesingle
 
 
     def __call__(self, trainer=None):
@@ -70,11 +120,17 @@ class ReconstructorGAN(Evaluator):
                 
                 # get a reconstruction from the GAN: 
                 pred_z = eval_func(bold)
+
+                if self.z_outfilename != None: 
+                    savemat(self.z_outfilename, {'pred_z':pred_z.data})
+
                 rec  = self.trained_gan.generate_x_from_z(pred_z, as_numpy=True)
 
+                if np.max(rec[:])>=1.0:   # NOTE: happens!
+                    print "Out of bounds values encountered in reconstruction image. Clipping..", np.max(rec[:])
+
                 # move between 0 and 1: 
-                rec = np.squeeze((rec + 1.0) / 2.0)
-                ##img = np.squeeze((img + 1.0) / 2.0)   # TODO: necessary?
+                rec = np.clip(  np.squeeze((rec + 1.0) / 2.0), 0.0, 1.0 ) 
 
                 if self.shape:
                     img = np.reshape(img.data,np.hstack([img.shape[0], self.shape]))
@@ -95,6 +151,13 @@ class ReconstructorGAN(Evaluator):
 
                 #plt.tight_layout()
                 plt.savefig(self.filename + '.png')
+                plt.close()
+                
+                if self.savesingle: 
+                    print "Writing individual images for this batch..."
+                    for i in xrange(img.shape[0]):
+                        imsave(args.out_dir + '/recon_valset_single/' + str(i) + '.png', img[i], cmap='gray')
+                        imsave(args.out_dir + '/recon_valset_single/scrambled' + str(i) + '.png', rec[i], cmap='gray')
 
 
 
