@@ -51,7 +51,7 @@ else:
 
     discriminator = Sequential(weight_initializer=config.weight_initializer, weight_init_std=config.weight_init_std)
     discriminator.add(gaussian_noise(std=0.15))
-    discriminator.add(Convolution2D(1, 32, ksize=4, stride=2, pad=1, use_weightnorm=config.use_weightnorm))
+    discriminator.add(Convolution2D(1, 32, ksize=3, stride=2, pad=1, use_weightnorm=config.use_weightnorm))
     discriminator.add(BatchNormalization(32))
     discriminator.add(Activation(config.nonlinearity))
     discriminator.add(Convolution2D(32, 64, ksize=4, stride=2, pad=1, use_weightnorm=config.use_weightnorm))
@@ -60,7 +60,8 @@ else:
     discriminator.add(Convolution2D(64, 128, ksize=4, stride=2, pad=1, use_weightnorm=config.use_weightnorm))
     discriminator.add(BatchNormalization(128))
     discriminator.add(Activation(config.nonlinearity))
-    discriminator.add(Convolution2D(128, 256, ksize=3, stride=1, pad=1, use_weightnorm=config.use_weightnorm))
+    discriminator.add(Convolution2D(128, 256, ksize=4, stride=2, pad=1, use_weightnorm=config.use_weightnorm))
+    #discriminator.add(Convolution2D(128, 256, ksize=4, stride=2, pad=1, use_weightnorm=config.use_weightnorm))
     discriminator.add(BatchNormalization(256))
     discriminator.add(Activation(config.nonlinearity))
     if config.use_minibatch_discrimination:
@@ -121,7 +122,8 @@ else:
     generator.add(Deconvolution2D(128, 64, ksize=4, stride=2, pad=paddings.pop(0), use_weightnorm=config.use_weightnorm))
     generator.add(BatchNormalization(64))
     generator.add(Activation(config.nonlinearity))
-    generator.add(Deconvolution2D(64, 1, ksize=3, stride=2, pad=paddings.pop(0), outsize=[image_width, image_height], use_weightnorm=config.use_weightnorm))
+    #generator.add(Deconvolution2D(64, 1, ksize=4, stride=2, pad=paddings.pop(0), outsize=[image_width, image_height], use_weightnorm=config.use_weightnorm))
+    generator.add(Deconvolution2D(64, 1, ksize=4, stride=2, pad=paddings.pop(0), outsize=[image_width, image_height], use_weightnorm=config.use_weightnorm))
 
     #generator.add(squeeze())
     if config.distribution_output == "sigmoid":

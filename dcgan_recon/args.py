@@ -72,3 +72,4 @@ args.bold_to_z_model = 'MLP'  # LinearRegression || MLP   # The MLP tends to ove
 args.nhidden_mlp = 300
 
 args.only_earlyVC = False  # whether to focus on specific ROIs
+
