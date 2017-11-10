@@ -7,6 +7,8 @@ import chainer.initializers as I
 import chainer.links as L
 import numpy as np
 
+import inspect
+
 from args import args
 
 from sequential.functions import reshape_1d
@@ -22,6 +24,21 @@ def gram_matrix(y):
     return gram
 
 
+def mixupbatches(x, y):  # TODO: cur requires even batch sizes, take sth. small | can be implemented as a converter and passed to the Evaluator
+    batch_n = x.shape[0] / 2
+    alpha = 0.5
+
+    lambdas = np.random.beta(alpha + 1.0, alpha, batch_n)[:,np.newaxis]
+
+    x_a = x[:batch_n] ; x_b = x[batch_n:]
+    y_a = reshape_1d()(y[:batch_n]) ; y_b = reshape_1d()(y[batch_n:])
+
+    x_mix = lambdas*x_a + (1.0 - lambdas)*x_b
+    y_mix = lambdas*y_a + (1.0 - lambdas)*y_b
+
+    return x_mix, F.reshape(y_mix,(batch_n,)+y.shape[1:])
+
+
 ###############################
 ## Loss function in pixel space
 
@@ -33,15 +50,21 @@ class RegressorZ(Chain):
 
     def __call__(self, x, img_real):
 
+        if inspect.currentframe().f_back.f_code.co_name != 'updater':
+            coinflip = np.random.choice([True, False, True]) # don't mixup in every run 
+            if coinflip: 
+                x, img_real = mixupbatches(x, img_real)
+            print "mixup"
+        else: 
+            print "Validating..."
+
         z = self.predictor(x)
 
         img_fake = self.trained_gan.generate_x_from_z(z)
         img_fake = F.clip(img_fake, -1.0, 1.0)   # despite tanh at the end, GAN produces a few overflowing values (usually up to 1.07)
         img_fake.volatile = 'OFF' ; img_real.volatile = 'OFF'
-        
-        minus_10_percent_shape = (57,57)
 
-        if self.featnet != None: 
+        if self.featnet != None:   # TODO: use brainsnet for brains feature matching
             # just a test: transpose before moving into featnet
             #class_fake, layer_activations_fake = self.featnet(    F.transpose(    Variable(0.05+img_fake.data/2.0), axes=(0,1,3,2)), train=False, return_activations=True)
             #class_fake.unchain_backward()
@@ -57,37 +80,44 @@ class RegressorZ(Chain):
         # Computing loss
         loss = 0
 
-        if args.stimuli == 'brains':   # TODO: use feature matching net for brains
-            loss += 1.5*F.mean_absolute_error(F.resize_images(img_fake, minus_10_percent_shape), 
-                                              F.resize_images(img_real, minus_10_percent_shape)) + \
-                                              mean_absolute_error(layer_activations_fake[1], layer_activations_real[1])
-                                             #F.resize_images(F.reshape(img_real, img_fake.shape),minus_10_percent_shape)) + \
-        elif self.featnet != None:
-            #for layer_idx in [np.random.choice([0, 1, 'pixel'])]:    # TODO:  these print statements for finetuning
+        if self.featnet != None:
+            #for layer_idx in [np.random.choice([0, 1, 'pixel'])]:    # TODO: use the print statements for finetuning
             for layer_idx in [0, 1, 'pixel']: 
                 if layer_idx == 'pixel':
                     #loss += F.mean_squared_error(img_fake, img_real)
-                    loss += F.mean_absolute_error(F.resize_images(img_fake, (58,58)),
-                                                  F.resize_images(img_real, (58,58)))
-
+                    loss += args.lambda_pixel * F.mean_absolute_error(F.resize_images(img_fake, (args.small_img_dims,args.small_img_dims)),
+                                                                      F.resize_images(img_real, (args.small_img_dims,args.small_img_dims)))
+                                                                      
                     #print "layer", layer_idx, "loss after pixel:", loss.data
 
                 else: 
                     layer_idx = int(layer_idx)
                     layer_activations_fake[layer_idx].unchain_backward() ; layer_activations_real[layer_idx].unchain_backward()
 
-                    #print "max of real activations", np.max(layer_activations_real[layer_idx].data[:])  # check occassionally
-                    #print "min of real activations", np.min(layer_activations_real[layer_idx].data[:])  # check occassionally
+                    #print "max of real activations", np.max(layer_activations_real[layer_idx].data[:])        # check occassionally
+                    #print "min of real activations", np.min(layer_activations_real[layer_idx].data[:])        # check occassionally
                     #print "median of real activations", np.median(layer_activations_real[layer_idx].data[:])  # check occassionally
-                    #print "mean of real activations", np.mean(layer_activations_real[layer_idx].data[:])  # check occassionally
+                    #print "mean of real activations", np.mean(layer_activations_real[layer_idx].data[:])      # check occassionally
                     
-                    # NOTE: set manually for each layer
-                    mask_fake = layer_activations_fake[layer_idx].data > 1.0
-                    mask_real = layer_activations_real[layer_idx].data > 1.0
+                    mask_fake_pos = layer_activations_fake[layer_idx].data > 1.0
+                    mask_real_pos = layer_activations_real[layer_idx].data > 1.0
 
                     # feature presence loss ("multi-class" loss on [0,1] valued vectors)
-                    loss += cross_entropy( reshape_1d()( Variable(mask_fake.astype('float32')) ),  # was: 2.0
-                                           reshape_1d()( Variable(mask_real.astype('int32')) ) )
+                    loss += args.lambda_presence * cross_entropy( reshape_1d()( Variable(mask_fake_pos.astype('float32')) ),  
+                                                                  reshape_1d()( Variable(mask_real_pos.astype('int32')) ) )
+
+                    if int(layer_idx) == 0:  # probably only makes sense for first layer, if for any
+                        mask_fake_neg = layer_activations_fake[layer_idx].data < -1.0   
+                        mask_real_neg = layer_activations_real[layer_idx].data < -1.0
+
+                        loss += args.lambda_presence * cross_entropy( reshape_1d()( Variable(mask_fake_neg.astype('float32')) ),  
+                                                                      reshape_1d()( Variable(mask_real_neg.astype('int32')) ) )
+
+                        mask_real = mask_real_pos + mask_real_neg
+
+                    else: 
+                        mask_real = mask_real_pos
+
                     #print "layer", layer_idx, "loss after presence:", loss.data
                     # use either (second is more correct, but probably there is no difference): 
                     # F.sigmoid_cross_entropy
@@ -96,8 +126,9 @@ class RegressorZ(Chain):
                     # activation magnitude loss (only for activated features)
                     if np.sum(mask_real[:]) > 0.0: 
                         # compare losses on mask_real features (result should not be sparse)
-                        loss += F.mean_squared_error(layer_activations_fake[layer_idx][mask_real],   
-                                                     layer_activations_real[layer_idx][mask_real])
+                        loss += args.lambda_magnitude * F.mean_squared_error(layer_activations_fake[layer_idx][mask_real],   
+                                                                             layer_activations_real[layer_idx][mask_real])
+                    #print "layer", layer_idx, "loss after magnitude:", loss.data
 
                     # style loss  (leave out)
                     #loss += 100 * F.mean_squared_error(gram_matrix(layer_activations_fake[layer_idx]), 

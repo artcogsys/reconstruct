@@ -26,7 +26,7 @@ from model import gan
 from recon_utilities import *
 
 # feature matching network
-from train_featurematching_gray_VGGS import VGGSNet, AlexNet, Classifier  # TODO: replace with grayscale net
+from train_featurematching_gray_VGGS import AlexNet, Classifier
 
 from sklearn.preprocessing import StandardScaler
 
@@ -36,9 +36,12 @@ from sklearn.preprocessing import StandardScaler
 if __name__ == "__main__":
 
     # For getting layer activations: 
-    alexnet_snapshot = '/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/alexgray_model_iter_1175000'
+    alexnet_snapshot = '/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/' + args.featnet_fname
     alexnet = Classifier(AlexNet()) 
     chainer.serializers.load_npz(alexnet_snapshot, alexnet)
+
+    ####### Load and prepare stimulus data #######
+    print "Loading stimulus data..."
 
     # check low level features: 
     #savemat('conv1W.mat', {'conv1W':alexnet.predictor.conv1.W.data})
@@ -56,12 +59,10 @@ if __name__ == "__main__":
 
     real_img_dims = realstim_trn.shape[1:]
 
-    ####### Load and prepare stimulus data #######
-    print "Loading stimulus data..."
 
     realstim_trn = downsample_square_imgs(realstim_trn, args.image_dims)
     realstim_val = downsample_square_imgs(realstim_val, args.image_dims)
-
+    
     if args.convert_grayscale:   # only for Horikawa. vim-1 is already grayscale.
         col_channels = 1 
         realstim_trn = np.dot(realstim_trn[...,:3], [0.299, 0.587, 0.114])
@@ -73,6 +74,7 @@ if __name__ == "__main__":
         for idx in xrange(realstim_val.shape[0]): 
             realstim_val[idx,...] = imadjust(realstim_val[idx,...], inrange = [np.min(realstim_val[idx,:]),np.max(realstim_val[idx,:])], outrange = [0.,255.])
 
+    if args.stimuli != 'vim1': 
         realstim_trn = (realstim_trn/255.0).astype('float32')
         realstim_val = (realstim_val/255.0).astype('float32')
 
@@ -94,6 +96,7 @@ if __name__ == "__main__":
     #exec "realbold_trn = tables.open_file(args.base_dir + 'responses.mat').root.dataTrnS" + args.subject + "[:].astype('float32')"
     #exec "realbold_val = tables.open_file(args.base_dir + 'responses.mat').root.dataValS" + args.subject + "[:].astype('float32')"
 
+    # Code still expects n_vox x n_time  (as in new-vim-1)
     if args.load_pca: 
         if args.stimuli == 'horikawa': 
             fn_spec = "_PCA"
@@ -103,7 +106,7 @@ if __name__ == "__main__":
         elif args.stimuli == 'vim1': 
             exit('PCAd new vim-1 file does not exist yet')
         elif args.stimuli == 'brains': 
-            exit('PCAd BRAINS file does not exist yet')
+            responsesfile = loadmat(args.bold_dir + 'brainsbold_S' + args.subject + '.mat')
                   
     else: 
         if args.stimuli == 'horikawa': 
@@ -114,9 +117,11 @@ if __name__ == "__main__":
 
         elif args.stimuli == 'vim1':    # dataTrnSingle: vox_n x singletrial_n (3500) x rep_n (2)  |  dataValSingle: vox_n x singletrial_n (1560) x rep_n (13)
             exec "realbold_trn = loadmat(args.bold_dir + 'S" + args.subject + "data_trn_singletrial_v6.mat')['dataTrnSingleS" + args.subject + "'].astype('float32')"
-            exec "realbold_val = loadmat(args.bold_dir + 'S" + args.subsject + "data_val_singletrial_v6.mat')['dataValSingleS" + args.subject + "'].astype('float32')"
+            exec "realbold_val = loadmat(args.bold_dir + 'S" + args.subject + "data_val_singletrial_v6.mat')['dataValSingleS" + args.subject + "'].astype('float32')"
+
         elif args.stimuli == 'brains': 
-            exit('PCAd BRAINS file does not exist yet')
+            exec "realbold_trn = loadmat(args.bold_dir + 'brainsbold_S" + args.subject + ".mat')['dataTrnSingleS" + args.subject + "'].astype('float32').T"
+            exec "realbold_val = loadmat(args.bold_dir + 'brainsbold_S" + args.subject + ".mat')['dataValSingleS" + args.subject + "'].astype('float32').T"
 
     # what is still NaN should be 0
     realbold_trn[np.isnan(realbold_trn)] = 0.0
@@ -125,12 +130,18 @@ if __name__ == "__main__":
 
     ####### PCA on fMRI data #######
     if args.normalize:   # currently only do on horikawa (vim-1 is already 0-mean)
+        if args.stimuli == 'brains': 
+            realbold_trn = realbold_trn.T  ;  realbold_val = realbold_val.T
+
         scaler = StandardScaler(with_std=False)   # voxel features are on the same scale, so no unit variance, but do demean.
         scaler.fit(realbold_trn) 
         realbold_trn = scaler.transform(realbold_trn)
         realbold_val = scaler.transform(realbold_val)
 
-    if args.calc_pca and args.stimuli == 'vim1':   # only new vim-1, for Horikawa load PCA'd data
+        if args.stimuli == 'brains': 
+            realbold_trn = realbold_trn.T  ;  realbold_val = realbold_val.T
+
+    if args.calc_pca and args.stimuli != 'horikawa':   # only new vim-1, for Horikawa load PCA'd data
         n_voxels = realbold_trn.shape[0]
 
         print "Starting PCA..."
@@ -143,10 +154,11 @@ if __name__ == "__main__":
 
         n_vox_pca = realbold_trn.shape[1]
 
-        # reshape and mean
-        print "PCA applied to data. Taking mean over single trials."
-        realbold_trn = np.mean( np.reshape(realbold_trn.T, [n_vox_pca, -1,  2]), axis=2 ).T 
-        realbold_val = np.mean( np.reshape(realbold_val.T, [n_vox_pca, -1, 13]), axis=2 ).T  # [:,:,:2] will lead to no difference between train and val
+        if args.stimuli == 'vim1': 
+            # reshape and mean
+            print "PCA applied to data. Taking mean over single trials."
+            realbold_trn = np.mean( np.reshape(realbold_trn.T, [n_vox_pca, -1,  2]), axis=2 ).T 
+            realbold_val = np.mean( np.reshape(realbold_val.T, [n_vox_pca, -1, 13]), axis=2 ).T  # [:,:,:2] will lead to no difference between train and val
 
     print "Number of voxels after PCA:", realbold_trn.shape[1], "|", realbold_val.shape[1]
 
@@ -216,7 +228,7 @@ if __name__ == "__main__":
     if extensions.PlotReport.available():
         trainer.extend(
             extensions.PlotReport(['main/loss', 'validation/main/loss'],
-                                  'epoch', file_name='loss_plotreport_MLP_L01pix_S' + args.subject + '.png', trigger=(1, 'epoch')))
+                                  'epoch', file_name='loss_plotreport_mixup_L01pix_S' + args.subject + '.png', trigger=(1, 'epoch')))
     # Take a snapshot every 5 epochs
     # Use trigger=(1, 'epoch') to store model at each epoch
     trainer.extend(extensions.snapshot(filename='snapshot_{.updater.epoch}'), trigger=(5, 'epoch'))
@@ -227,8 +239,8 @@ if __name__ == "__main__":
     # use nrecon first images for train and validation set
     recon_train_iter      = FiniteIterator(train, batch_size=args.nrecon)
     recon_validation_iter = FiniteIterator(validation, batch_size=args.nrecon)
-    trainer.extend(ReconstructorGAN(recon_train_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_train_MLP_L01pix_S' + args.subject), trigger=(1, 'epoch'))
-    trainer.extend(ReconstructorGAN(recon_validation_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_validation_MLP_L01pix_S' + args.subject,  z_outfilename='z_recon_val_S' + args.subject + ".mat", savesingle=True), trigger=(1, 'epoch'))
+    trainer.extend(ReconstructorGAN(recon_train_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_train_mixup_L01pix_S' + args.subject), trigger=(1, 'epoch'))
+    trainer.extend(ReconstructorGAN(recon_validation_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_validation_mixup_L01pix_S' + args.subject,  z_outfilename='z_recon_val_S' + args.subject + ".mat", savesingle=True), trigger=(1, 'epoch'))
 
     # run training
     trainer.run()

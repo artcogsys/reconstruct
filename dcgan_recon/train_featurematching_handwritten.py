@@ -27,6 +27,11 @@ import pickle
 
 from matplotlib.image import imsave
 
+from scipy.io import loadmat
+
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split
+
 
 def unpickle(file):
     with open(file, 'rb') as fo:
@@ -71,18 +76,6 @@ def imadjust(img, tolerance = 0.0, inrange= [0.,255.], outrange = [0.,255.]):
     return img
 
 
-def transform_grayscale(image_batch, apply_kaymask = False):
-    image_batch = np.dot(image_batch.transpose([0,2,3,1])[...,:3], [0.299, 0.587, 0.114])
-
-    # Kay contrast enhancement:
-    for idx in range(image_batch.shape[0]): 
-       image_batch[idx,...] = imadjust(image_batch[idx,...], inrange = [np.min(image_batch[idx,:]),np.max(image_batch[idx,:])], outrange = [0.,255.])
-
-    image_batch = (image_batch/255.0).astype('float32') - 0.5  # same as in train_featurematching_VGGS (-0.5 to 0.5, needs to be considered when training network)
-
-    return np.expand_dims(image_batch, axis=1)
-
-    
 def load_databatch(databatch_path, img_size=64, has_mean=True):
     d = unpickle(databatch_path)
     x = d['data']
@@ -202,76 +195,50 @@ class AlexNet(chn.Chain):
         return h
 
 
+
 # Train VGG-S for 64x64 HSV or grayscale images from ImageNet. 
 if __name__ == "__main__":
 
-    debug = False
+    debug = True
+
+    print("Using DEBUG mode...")
 
     # parameters
     gpu_id = 0
-    batchsize = 128
+    batchsize = 32
     train_epochs = 1000
-    dims = 64
+    dims = 56
     test = False
-    resume = False
+    resume = True
 
-    apply_kaymask = True
+    apply_kaymask = False
 
     col_n = 1  # 3 || 1
 
-    imagenet_dir = '/vol/ccnlab-scratch1/katmul/reconv/imagenet/'    
     model_outdir = '/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/'
 
-    num_imgs = 1281167 if not debug else 128116  
-    # 1281167 ... number of training images in vim1  | 1024928*n_t ... minus batch10 und batch9 |  128116 ... number of training images in batch 1
+    data_file = loadmat('gentrain_imgs/brains_characters.mat')
 
-    train_imgs = np.empty([num_imgs,col_n,dims,dims], dtype='float32')
-    train_labels = []
+    labels = data_file['labels']
+    le = preprocessing.LabelEncoder()
+    le.fit(labels)
+    labels = le.transform(labels)
 
-    imagenet_pickles = ['train_data_batch_' + str(i+1) for i in range(10)] if not debug else ['train_data_batch_1']
+    img_set = np.reshape(data_file['X'], [data_file['X'].shape[0], 1, 56, 56]).transpose([0, 1, 3, 2]).astype('float32')  # transpose due to col vs. row major order
 
-    first_index = 0
+    assert(img_set.shape[0] == labels.shape[0])
 
-    mean_image = None  # needs to be initialized?
+    # range [-0.5,0.5]
+    img_set = img_set - 0.5
 
-    ## Load ImageNet training data
-    for imagenet_pickle in imagenet_pickles:
-        print("Currently processing file", imagenet_pickle, "...") 
-        x_batch, labels_batch, mean_image = load_databatch(imagenet_dir + imagenet_pickle)
+    train_imgs, val_imgs, train_labels, val_labels = train_test_split(img_set, labels, test_size = 0.1)
 
-        last_index = first_index + x_batch.shape[0]
-
-        train_labels = train_labels + labels_batch
-        train_imgs[first_index:last_index] = transform_grayscale(x_batch)
-
-        first_index = last_index
-    
-    train_labels = np.array(train_labels, dtype=np.int32)
-
-    ## Load ImageNet validation data
-    val_imgs, val_labels, _ = load_databatch(imagenet_dir + 'val_data', has_mean=False) 
-
-    val_imgs = val_imgs/np.float(255.0) - 0.45
-    val_imgs = transform_grayscale(val_imgs)
-
-    # Debugging output: 
-    print("train_imgs[1]", train_imgs[1])
-    print("train_imgs[2]", train_imgs[2])
-
-    print("np.min(train_imgs[:])", np.min(train_imgs[:]))
-    print("np.max(train_imgs[:])", np.max(train_imgs[:]))
-
-    print("np.min(val_imgs[:])", np.min(val_imgs[:]))
-    print("np.max(val_imgs[:])", np.max(val_imgs[:]))
-
-    print("np.mean(train_imgs[:])", np.mean(train_imgs[:]))
-    print("np.mean(val_imgs[:])", np.mean(val_imgs[:]))
-
+    # Save example image to check whether dimensions are correct. 
     imsave('/vol/ccnlab-scratch1/katmul/reconv/pic1.png', np.squeeze(train_imgs[0]+0.5), cmap='gray')
 
     assert(train_imgs.shape[1:] == val_imgs.shape[1:])
 
-    train_data = TupleDataset(train_imgs, np.array(train_labels))
+    train_data = TupleDataset(train_imgs, np.array(train_labels, np.int32))
     val_data = TupleDataset(val_imgs, np.array(val_labels, np.int32))
 
     train_iter = iterators.SerialIterator(train_data, batchsize, shuffle=True)
@@ -299,9 +266,9 @@ if __name__ == "__main__":
     trainer.extend(extensions.Evaluator(val_iter, model, device=gpu_id),
              trigger=val_interval)
 
-    trainer.extend(extensions.snapshot(filename='alexgray_snapshot_iter_{.updater.iteration}'), trigger=val_interval)
+    trainer.extend(extensions.snapshot(filename='alexgrayBRAINS_snapshot_iter_{.updater.iteration}'), trigger=val_interval)
     trainer.extend(extensions.snapshot_object(
-        model, 'alexgray_model_iter_{.updater.iteration}'), trigger=val_interval)
+        model, 'alexgrayBRAINS_model_iter_{.updater.iteration}'), trigger=val_interval)
     trainer.extend(extensions.LogReport(trigger=log_interval))
     trainer.extend(extensions.observe_lr(), trigger=log_interval)
     trainer.extend(extensions.PrintReport([
@@ -311,7 +278,7 @@ if __name__ == "__main__":
     trainer.extend(extensions.ProgressBar(update_interval=10))
 
     if resume:
-        chn.serializers.load_npz("/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/alexgray_snapshot_iter_700000", trainer)
+        chn.serializers.load_npz("/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/alexgrayBRAINS_snapshot_iter_45000", trainer)
 
     trainer.run()
 
