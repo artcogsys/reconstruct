@@ -24,21 +24,6 @@ def gram_matrix(y):
     return gram
 
 
-def mixupbatches(x, y):  # TODO: cur requires even batch sizes, take sth. small | can be implemented as a converter and passed to the Evaluator
-    batch_n = x.shape[0] / 2
-    alpha = 0.5
-
-    lambdas = np.random.beta(alpha + 1.0, alpha, batch_n)[:,np.newaxis]
-
-    x_a = x[:batch_n] ; x_b = x[batch_n:]
-    y_a = reshape_1d()(y[:batch_n]) ; y_b = reshape_1d()(y[batch_n:])
-
-    x_mix = lambdas*x_a + (1.0 - lambdas)*x_b
-    y_mix = lambdas*y_a + (1.0 - lambdas)*y_b
-
-    return x_mix, F.reshape(y_mix,(batch_n,)+y.shape[1:])
-
-
 ###############################
 ## Loss function in pixel space
 
@@ -49,14 +34,6 @@ class RegressorZ(Chain):
         self.featnet = featnet
 
     def __call__(self, x, img_real):
-
-        if inspect.currentframe().f_back.f_code.co_name != 'updater':
-            coinflip = np.random.choice([True, False, True]) # don't mixup in every run 
-            if coinflip: 
-                x, img_real = mixupbatches(x, img_real)
-            print "mixup"
-        else: 
-            print "Validating..."
 
         z = self.predictor(x)
 
@@ -72,17 +49,17 @@ class RegressorZ(Chain):
             #class_real.unchain_backward()
 
             # The AlexNet is trained on contrast-enhanced grayscale images in the range [-0.5 , 0.5]. GAN output and training data are in range [-1.0 , 1.0]
-            class_fake, layer_activations_fake = self.featnet( Variable(0.05 + img_fake.data/2.0), train=False, return_activations=True)
-            class_real, layer_activations_real = self.featnet( Variable(0.05 + img_real.data/2.0), train=False, return_activations=True) 
+            _, layer_activations_fake = self.featnet( Variable(img_fake.data/2.0), train=False, return_activations=True)
+            _, layer_activations_real = self.featnet( Variable(img_real.data/2.0), train=False, return_activations=True) 
 
-            class_fake.unchain_backward() ; class_real.unchain_backward()   # plain non-softmax last layer output
+            #class_fake.unchain_backward() ; class_real.unchain_backward()   # plain non-softmax last layer output
 
         # Computing loss
         loss = 0
 
         if self.featnet != None:
             #for layer_idx in [np.random.choice([0, 1, 'pixel'])]:    # TODO: use the print statements for finetuning
-            for layer_idx in [0, 1, 'pixel']: 
+            for layer_idx in [0,1,'pixel']: 
                 if layer_idx == 'pixel':
                     #loss += F.mean_squared_error(img_fake, img_real)
                     loss += args.lambda_pixel * F.mean_absolute_error(F.resize_images(img_fake, (args.small_img_dims,args.small_img_dims)),

@@ -29,9 +29,9 @@ def main():
     #  python train.py -g 1 -m /vol/ccnlab-scratch1/katmul/reconv/gan_models/model64x64rgb/ -p /vol/ccnlab-scratch1/katmul/reconv/gan_models/model64x64rgb/ --seed 423    
 
     if debug: 
-        images = load_gray_images("/vol/ccnlab-scratch1/katmul/reconv/gentrain_imgs/brains_chars/") # dim64x64glove_debug/")  dim64x64bwnomask_debug/")
+        images = load_gray_images("/vol/ccnlab-scratch1/katmul/reconv/gentrain_imgs/dim64x64bwnomask_debug/") # dim64x64glove_debug/")  dim64x64bwnomask_debug/")
     else:
-        images = load_gray_images("/vol/ccnlab-scratch1/katmul/reconv/gentrain_imgs/brains_chars")    #dim64x64glove/")  /dim64x64bwnomask/")
+        images = load_gray_images("/vol/ccnlab-scratch1/katmul/reconv/gentrain_imgs/dim64x64bwnomask")    #dim64x64glove/")  /dim64x64bwnomask/") (
 
     # config
     discriminator_config = gan.config_discriminator

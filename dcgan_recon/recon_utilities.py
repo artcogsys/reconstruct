@@ -2,7 +2,7 @@ import numpy as np
 import copy
 from chainer.dataset import iterator
 from chainer import reporter as reporter_module
-from chainer import variable
+from chainer.variable import Variable
 from chainer.training.extensions.evaluator import Evaluator
 import matplotlib.pyplot as plt
 
@@ -75,7 +75,7 @@ class ReconstructorGAN(Evaluator):
 
     """
     def __init__(self, iterator, target, trained_gan, shape = None, filename='foo', z_outfilename = None, savesingle=False):
-        super(ReconstructorGAN, self).__init__(iterator, target)
+        super(ReconstructorGAN, self).__init__(iterator, target, device=args.gpu_device)
 
         self.shape = shape
         self.filename = filename
@@ -112,7 +112,7 @@ class ReconstructorGAN(Evaluator):
             observation = {}
             with reporter_module.report_scope(observation):
                 in_arrays = self.converter(batch, self.device)
-                in_vars = tuple(variable.Variable(x, volatile='on')
+                in_vars = tuple(Variable(x, volatile='on')
                                 for x in in_arrays)
 
                 bold = in_vars[0]
@@ -121,19 +121,27 @@ class ReconstructorGAN(Evaluator):
                 # get a reconstruction from the GAN: 
                 pred_z = eval_func(bold)
 
-                if self.z_outfilename != None: 
-                    savemat(self.z_outfilename, {'pred_z':pred_z.data})
-
                 rec  = self.trained_gan.generate_x_from_z(pred_z, as_numpy=True)
+
+                if args.gpu_device != -1: 
+                    pred_z = pred_z.data.get()
+                    img = img.data.get()
+                else: 
+                    pred_z = pred_z.data
+                    img = img.data
+
+                if self.z_outfilename != None: 
+                    savemat(args.out_dir + self.z_outfilename, {'pred_z':pred_z})
 
                 if np.max(rec[:])>=1.0:   # NOTE: happens!
                     print "Out of bounds values encountered in reconstruction image. Clipping..", np.max(rec[:])
 
                 # move between 0 and 1: 
                 rec = np.clip(  np.squeeze((rec + 1.0) / 2.0), 0.0, 1.0 ) 
+                img = np.squeeze((img + 1.0) / 2.0)
 
                 if self.shape:
-                    img = np.reshape(img.data,np.hstack([img.shape[0], self.shape]))
+                    img = np.reshape(img,np.hstack([img.shape[0], self.shape]))
 
                 n = img.shape[0]
                 f, ax = plt.subplots((n/5)*2, 5, figsize=(40,80))
@@ -141,11 +149,11 @@ class ReconstructorGAN(Evaluator):
                 # Plot images and their reconstructions: 
                 for row in xrange(0,(n/5)*2,2):
                     for i in xrange(5): 
-                        ax[row , i].imshow(np.squeeze(img[(row/2)*5 + i]), cmap='gray')
+                        ax[row , i].imshow(np.squeeze(img[(row/2)*5 + i]), cmap='gray', vmin=0.0, vmax=1.0)
                         ax[row , i].axis('equal')
                         ax[row , i].axis('off')
 
-                        ax[row+1 , i].imshow(np.squeeze(rec[(row/2)*5 + i]), cmap='gray')
+                        ax[row+1 , i].imshow(np.squeeze(rec[(row/2)*5 + i]), cmap='gray', vmin=0.0, vmax=1.0)
                         ax[row+1 , i].axis('equal')
                         ax[row+1 , i].axis('off')
 
@@ -156,24 +164,24 @@ class ReconstructorGAN(Evaluator):
                 if self.savesingle: 
                     print "Writing individual images for this batch..."
                     for i in xrange(img.shape[0]):
-                        imsave(args.out_dir + '/recon_valset_single/' + str(i) + '.png', img[i], cmap='gray')
-                        imsave(args.out_dir + '/recon_valset_single/scrambled' + str(i) + '.png', rec[i], cmap='gray')
+                        imsave(args.out_dir + 'recon_valset_single_run' + args.runID + '/' + str(i) + '.png', img[i], cmap='gray')
+                        imsave(args.out_dir + 'recon_valset_single_run' + args.runID + '/scrambled' + str(i) + '.png', rec[i], cmap='gray')
 
 
-
-class FiniteIterator(iterator.Iterator):
+class FiniteIterator(iterator.Iterator,):
     """
     Dataset iterator that serially reads the examples [0:batch_size].
 
     """
 
-    def __init__(self, dataset, batch_size):
+    def __init__(self, dataset, batch_size, shuffle = False):
         self.dataset = dataset
         self.batch_size = batch_size
 
         self.current_position = 0
         self.epoch = 0
         self.is_new_epoch = False
+        self.shuffle = shuffle
 
     def __next__(self):
 
@@ -182,7 +190,12 @@ class FiniteIterator(iterator.Iterator):
 
         N = len(self.dataset)
 
-        batch = self.dataset[0:self.batch_size]
+        if self.shuffle: 
+            rand_selection = (np.random.choice(np.arange(len(self.dataset)), size=self.batch_size)).tolist()
+            batch = self.dataset[:]
+            batch = [batch[i] for i in rand_selection]
+        else: 
+            batch = self.dataset[0:self.batch_size]
 
         self.epoch += 1
         self.is_new_epoch = True

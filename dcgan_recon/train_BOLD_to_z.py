@@ -31,64 +31,7 @@ from train_featurematching_gray_VGGS import AlexNet, Classifier
 from sklearn.preprocessing import StandardScaler
 
 
-# TODO: allow processing this on GPU (especially for the grid search)
-
-if __name__ == "__main__":
-
-    # For getting layer activations: 
-    alexnet_snapshot = '/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/' + args.featnet_fname
-    alexnet = Classifier(AlexNet()) 
-    chainer.serializers.load_npz(alexnet_snapshot, alexnet)
-
-    ####### Load and prepare stimulus data #######
-    print "Loading stimulus data..."
-
-    # check low level features: 
-    #savemat('conv1W.mat', {'conv1W':alexnet.predictor.conv1.W.data})
-
-    realstim_file = loadmat(args.stimulus_file)
-
-    realstim_trn = realstim_file['stimTrn']
-    realstim_val = realstim_file['stimVal']
-    
-    if args.convert_grayscale: 
-        realstim_trn = realstim_trn.transpose([0,2,3,1])   # [3,500,500] to [500,500,3]
-        realstim_val = realstim_val.transpose([0,2,3,1])
-
-    img_dims = [args.image_dims, args.image_dims]
-
-    real_img_dims = realstim_trn.shape[1:]
-
-
-    realstim_trn = downsample_square_imgs(realstim_trn, args.image_dims)
-    realstim_val = downsample_square_imgs(realstim_val, args.image_dims)
-    
-    if args.convert_grayscale:   # only for Horikawa. vim-1 is already grayscale.
-        col_channels = 1 
-        realstim_trn = np.dot(realstim_trn[...,:3], [0.299, 0.587, 0.114])
-        realstim_val = np.dot(realstim_val[...,:3], [0.299, 0.587, 0.114])
-
-        # Kay contrast enhancement:
-        for idx in xrange(realstim_trn.shape[0]): 
-            realstim_trn[idx,...] = imadjust(realstim_trn[idx,...], inrange = [np.min(realstim_trn[idx,:]),np.max(realstim_trn[idx,:])], outrange = [0.,255.])
-        for idx in xrange(realstim_val.shape[0]): 
-            realstim_val[idx,...] = imadjust(realstim_val[idx,...], inrange = [np.min(realstim_val[idx,:]),np.max(realstim_val[idx,:])], outrange = [0.,255.])
-
-    if args.stimuli != 'vim1': 
-        realstim_trn = (realstim_trn/255.0).astype('float32')
-        realstim_val = (realstim_val/255.0).astype('float32')
-
-    stim_min = np.min(realstim_trn[:])
-    stim_max = np.max(realstim_trn[:])
-
-    # To range -1 , 1 (range of GAN-generated images)
-    realstim_trn = (((realstim_trn - stim_min) * (1.0 - -1.0)) / (stim_max - stim_min)) + -1.0
-    realstim_val = (((realstim_val - stim_min) * (1.0 - -1.0)) / (stim_max - stim_min)) + -1.0
-
-
-    ####### Load and prepare fMRI data #######
-    print "Loading BOLD data..."
-
+def load_bold_data(args): 
     ####### Load and prepare BOLD and stimulus data #######
     # old vim1 (no single trial data avaiable, PCA will be off)
     #print "Loading BOLD data..."
@@ -98,22 +41,22 @@ if __name__ == "__main__":
 
     # Code still expects n_vox x n_time  (as in new-vim-1)
     if args.load_pca: 
+        fn_spec = "_PCA"
         if args.stimuli == 'horikawa': 
-            fn_spec = "_PCA"
             responsesfile = loadmat(args.bold_dir + 'responses_S' + args.subject + fn_spec + '.mat')
             realbold_trn = responsesfile['respTrnS' + args.subject].astype('float32').T
             realbold_val = responsesfile['respValS' + args.subject].astype('float32').T
         elif args.stimuli == 'vim1': 
             exit('PCAd new vim-1 file does not exist yet')
         elif args.stimuli == 'brains': 
-            responsesfile = loadmat(args.bold_dir + 'brainsbold_S' + args.subject + '.mat')
+            responsesfile = loadmat(args.bold_dir + 'brainsbold_S' + args.subject + fn_spec + '.mat')
                   
     else: 
         if args.stimuli == 'horikawa': 
             fn_spec = ""
             responsesfile = loadmat(args.bold_dir + 'responses_S' + args.subject + fn_spec + '.mat')
-            realbold_trn = responsesfile['respTrnS' + subjectID].astype('float32').T
-            realbold_val = responsesfile['respValS' + subjectID].astype('float32').T
+            realbold_trn = responsesfile['respTrnS' + args.subject].astype('float32').T
+            realbold_val = responsesfile['respValS' + args.subject].astype('float32').T
 
         elif args.stimuli == 'vim1':    # dataTrnSingle: vox_n x singletrial_n (3500) x rep_n (2)  |  dataValSingle: vox_n x singletrial_n (1560) x rep_n (13)
             exec "realbold_trn = loadmat(args.bold_dir + 'S" + args.subject + "data_trn_singletrial_v6.mat')['dataTrnSingleS" + args.subject + "'].astype('float32')"
@@ -162,22 +105,99 @@ if __name__ == "__main__":
 
     print "Number of voxels after PCA:", realbold_trn.shape[1], "|", realbold_val.shape[1]
 
-    n_val = realstim_val.shape[0]
+    n_val = realbold_val.shape[0]
 
     if args.nrecon < n_val: 
+        print "Moving unused validation data from val to trn..."
         # Only use args.nrecon validation examples, use rest for training
         realbold_trn = np.concatenate([realbold_trn, np.tile(realbold_val[-(n_val-args.nrecon):], (args.val_repetitions,1))], axis = 0)
         realbold_val = realbold_val[:args.nrecon]
+        
+    return realbold_trn, realbold_val
 
+
+
+def load_stim_data(args):
+
+    realstim_file = loadmat(args.stimulus_file)
+
+    realstim_trn = realstim_file['stimTrn']
+    realstim_val = realstim_file['stimVal']
+    
+    if args.convert_grayscale: 
+        realstim_trn = realstim_trn.transpose([0,2,3,1])   # [3,500,500] to [500,500,3]
+        realstim_val = realstim_val.transpose([0,2,3,1])
+
+    img_dims = [args.image_dims, args.image_dims]
+
+    real_img_dims = realstim_trn.shape[1:]
+
+
+    realstim_trn = downsample_square_imgs(realstim_trn, args.image_dims)
+    realstim_val = downsample_square_imgs(realstim_val, args.image_dims)
+    
+    if args.convert_grayscale:   # only for Horikawa. vim-1 is already grayscale.
+        col_channels = 1 
+        realstim_trn = np.dot(realstim_trn[...,:3], [0.299, 0.587, 0.114])
+        realstim_val = np.dot(realstim_val[...,:3], [0.299, 0.587, 0.114])
+
+        # Kay contrast enhancement:
+        for idx in xrange(realstim_trn.shape[0]): 
+            realstim_trn[idx,...] = imadjust(realstim_trn[idx,...], inrange = [np.min(realstim_trn[idx,:]),np.max(realstim_trn[idx,:])], outrange = [0.,255.])
+        for idx in xrange(realstim_val.shape[0]): 
+            realstim_val[idx,...] = imadjust(realstim_val[idx,...], inrange = [np.min(realstim_val[idx,:]),np.max(realstim_val[idx,:])], outrange = [0.,255.])
+
+    if args.stimuli != 'vim1': 
+        realstim_trn = (realstim_trn/255.0).astype('float32')
+        realstim_val = (realstim_val/255.0).astype('float32')
+
+    stim_min = np.min(realstim_trn[:])
+    stim_max = np.max(realstim_trn[:])
+
+    # To range -1 , 1 (range of GAN-generated images)
+    realstim_trn = (((realstim_trn - stim_min) * (1.0 - -1.0)) / (stim_max - stim_min)) + -1.0
+    realstim_val = (((realstim_val - stim_min) * (1.0 - -1.0)) / (stim_max - stim_min)) + -1.0
+
+    n_val = realstim_val.shape[0]
+
+    if args.nrecon < n_val: 
+        print "Moving unused validation data from val to trn..."
         realstim_trn = np.concatenate([realstim_trn, np.tile(realstim_val[-(n_val-args.nrecon):], (args.val_repetitions,1,1))], axis = 0)
         realstim_val = realstim_val[:args.nrecon]
-
-    print "Number of training samples:", realbold_trn.shape[0]
-    print "Number of validation samples:", realbold_val.shape[0]
 
     # add singleton color dimension for chainer
     realstim_trn = realstim_trn[:,np.newaxis,:,:]
     realstim_val = realstim_val[:,np.newaxis,:,:]
+
+    return realstim_trn, realstim_val
+
+
+
+if __name__ == "__main__":
+
+    # For getting layer activations: 
+    alexnet_snapshot = '/vol/ccnlab-scratch1/katmul/reconv/featurematching_models/' + args.featnet_fname
+    if args.gpu_device != -1: 
+        alexnet = Classifier(AlexNet()).to_gpu(device=args.gpu_device)
+    else: 
+        alexnet = Classifier(AlexNet())
+    chainer.serializers.load_npz(alexnet_snapshot, alexnet)
+
+    img_dims = [args.image_dims, args.image_dims]
+
+    ####### Load and prepare stimulus data #######
+    print "Loading stimulus data..."
+    realstim_trn, realstim_val = load_stim_data(args)
+
+    # check low level features: 
+    #savemat('conv1W.mat', {'conv1W':alexnet.predictor.conv1.W.data})
+
+    ####### Load and prepare fMRI data #######
+    print "Loading BOLD data..."
+    realbold_trn, realbold_val = load_bold_data(args)
+
+    print "Number of training samples:", realbold_trn.shape[0]
+    print "Number of validation samples:", realbold_val.shape[0]
 
     # Sanity check for leftover NaNs: 
     assert(~np.isnan(np.sum(realstim_trn[:]))) ; assert(~np.isnan(np.sum(realstim_val[:])))
@@ -210,12 +230,12 @@ if __name__ == "__main__":
     if args.do_weightdecay:
         optim.add_hook(optimizer.WeightDecay(args.regularization_alpha))
 
-    updater = training.StandardUpdater(train_iter, optim)
+    updater = training.StandardUpdater(train_iter, optim, device=args.gpu_device)
 
     trainer = training.Trainer(updater, (args.nepochs, 'epoch'), out=args.out_dir)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(extensions.Evaluator(validation_iter, model))
+    trainer.extend(extensions.Evaluator(validation_iter, model, device=args.gpu_device))
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(log_name='log_S' + args.subject))
@@ -228,19 +248,19 @@ if __name__ == "__main__":
     if extensions.PlotReport.available():
         trainer.extend(
             extensions.PlotReport(['main/loss', 'validation/main/loss'],
-                                  'epoch', file_name='loss_plotreport_mixup_L01pix_S' + args.subject + '.png', trigger=(1, 'epoch')))
+                                  'epoch', file_name='loss_plotreport_L01pix_S' + args.subject + '_run' + args.runID + '.png', trigger=(1, 'epoch')))
     # Take a snapshot every 5 epochs
     # Use trigger=(1, 'epoch') to store model at each epoch
-    trainer.extend(extensions.snapshot(filename='snapshot_{.updater.epoch}'), trigger=(5, 'epoch'))
+    trainer.extend(extensions.snapshot(filename='run'+ args.runID +'_snapshot_{.updater.epoch}'), trigger=(10, 'epoch'))
 
     # Print a progress bar to stdout
     trainer.extend(extensions.ProgressBar())
 
     # use nrecon first images for train and validation set
-    recon_train_iter      = FiniteIterator(train, batch_size=args.nrecon)
+    recon_train_iter      = FiniteIterator(train, batch_size=args.nrecon, shuffle=True)  # don't shuffle if same set should always be reconstructed
     recon_validation_iter = FiniteIterator(validation, batch_size=args.nrecon)
-    trainer.extend(ReconstructorGAN(recon_train_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_train_mixup_L01pix_S' + args.subject), trigger=(1, 'epoch'))
-    trainer.extend(ReconstructorGAN(recon_validation_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_validation_mixup_L01pix_S' + args.subject,  z_outfilename='z_recon_val_S' + args.subject + ".mat", savesingle=True), trigger=(1, 'epoch'))
+    trainer.extend(ReconstructorGAN(recon_train_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_train_L01pix_S' + args.subject + '_run' + args.runID, z_outfilename='z_recon_val_S' + args.subject + '_run' + args.runID + '.mat'), trigger=(1, 'epoch'))
+    trainer.extend(ReconstructorGAN(recon_validation_iter, model, gan, shape=img_dims, filename=args.out_dir + '/recon_validation_L01pix_S' + args.subject + '_run' + args.runID, z_outfilename='z_recon_val_S' + args.subject + '_run' + args.runID + '.mat', savesingle=True), trigger=(1, 'epoch'))
 
     # run training
     trainer.run()
